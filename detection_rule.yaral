@@ -1,0 +1,73 @@
+rule detect_shadow_ai_usage {
+  meta:
+    author = "AI-Powered SecOps Analyst"
+    description = "Detects network connections to unapproved Generative AI services (Shadow AI)."
+    severity = "MEDIUM"
+    priority = "MEDIUM"
+    // MITRE ATT&CK: T1567 (Exfiltration to Cloud Storage)
+    // MITRE ATT&CK: T1102 (Web Service)
+
+  events:
+    // Define the list of indicators within the rule's scope
+    $shadow_ai_indicators = {
+        // LLM/Chat UIs & APIs
+        "chat.openai.com", "api.openai.com",
+        "claude.ai", "api.anthropic.com",
+        "gemini.google.com", "generativelanguage.googleapis.com", // Corrected typo
+        "perplexity.ai",
+        "bard.google.com",
+        // Code Assistants
+        "github.copilot.com", "api.github.com",
+        "cursor.sh", "cursor.ai",
+        // Content/Copywriting
+        "jasper.ai", "api.jasper.ai",
+        "copy.ai", "api.copy.ai",
+        // Image Generation
+        "midjourney.com",
+        // Model Hosting/Hubs
+        "huggingface.co",
+        // Common API base URLs
+        "models.googleapis.com",
+        "ai.google.dev",
+        "api.cohere.ai"
+    }
+
+    // Match on DNS, HTTP, or Network Connection events involving an indicator
+    (
+      // Option 1: DNS Log (UDM event type)
+      $e.metadata.event_type = "NETWORK_DNS" AND
+      strings.contains($e.network.dns.questions.name, $shadow_ai_indicators)
+    ) OR
+    (
+      // Option 2: Proxy/HTTP Log (UDM event type)
+      // Using target.hostname which is common for proxy logs in UDM
+      $e.metadata.event_type = "NETWORK_HTTP" AND
+      strings.contains($e.target.hostname, $shadow_ai_indicators)
+    ) OR
+    (
+       // Option 3: Direct Network Connection Log (UDM event type)
+       // Using target.domain or target.hostname if available
+       $e.metadata.event_type = "NETWORK_CONNECTION" AND
+       (strings.contains($e.target.hostname, $shadow_ai_indicators) OR strings.contains($e.target.domain, $shadow_ai_indicators))
+    )
+
+
+  outcome:
+    // Fields to include in the alert
+    $risk_score = 40
+    // Use coalesce to get the best available user ID
+    $principal_user = coalesce($e.principal.user.userid, $e.principal.user.windows_sid, $e.principal.user.email_addresses)
+    $principal_ip = $e.principal.ip
+    $principal_hostname = $e.principal.hostname
+    $target_indicator = if($e.metadata.event_type = "NETWORK_DNS", $e.network.dns.questions.name,
+                       if($e.metadata.event_type = "NETWORK_HTTP", $e.target.hostname,
+                       if($e.metadata.event_type = "NETWORK_CONNECTION", coalesce($e.target.hostname, $e.target.domain),
+                       "unknown")))
+    $event_type = $e.metadata.event_type
+    $product_name = $e.metadata.product_name
+    $sent_bytes = $e.network.sent_bytes
+    $received_bytes = $e.network.received_bytes
+
+  condition:
+    $e
+}
